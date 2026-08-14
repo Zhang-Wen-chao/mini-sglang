@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mini-sglang"
+version = "0.1.0"
+description = "A small pure-PyTorch teaching implementation of SGLang's radix cache, continuous batching scheduler, and inference engine"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = ["torch>=2.1,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+hf = ["transformers>=4.40", "sentencepiece"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
