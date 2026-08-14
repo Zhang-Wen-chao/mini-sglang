@@ -34,14 +34,14 @@
 
 ## Phase 2：连续批处理调度器（请求队列 + 抢占 + KV 块管理）
 
-- [ ] `kv_pool.py`：物理块分配器（free 列表、块表、块已写长度、K/V 张量池）
-- [ ] `scheduler.py`：
-  - [ ] 等待队列（FCFS）与 running 上限（模拟显存预算）
-  - [ ] prefill 时 `match_prefix` 复用前缀块（引用计数 +1）
-  - [ ] 内存不足：先 evict radix cache，再抢占（preempt，recompute 模式）
-  - [ ] 块完成规则：写满的块才进 radix cache；末块不完整留在请求上
-  - [ ] decode 步进、EOS / max_len 结束
-- [ ] CPU 单测：`tests/test_scheduler.py`（用确定性伪模型，不依赖真实模型）
+- [x] `kv_pool.py`：物理块分配器（free 列表、块表、块已写长度、K/V 张量池）
+- [x] `scheduler.py`：
+  - [x] 等待队列（FCFS）与 running 上限（模拟显存预算）
+  - [x] prefill 时 `match_prefix` 复用前缀块（引用计数 +1）
+  - [x] 内存不足：先 evict radix cache，再抢占（preempt，recompute 模式）
+  - [x] 块完成规则：写满的块才进 radix cache；末块不完整留在请求上
+  - [x] decode 步进、EOS / max_len 结束
+- [x] CPU 单测：`tests/test_scheduler.py`（用确定性伪模型，不依赖真实模型）
 
 ## Phase 3：最小推理引擎（tokenize → prefill → decode → 返回）
 

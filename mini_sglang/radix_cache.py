@@ -4,8 +4,11 @@ Faithful to SGLang's `sglang/srt/mem_cache/radix_cache.py`, simplified:
 
 - A node's key is an interval `(start, length)` into a shared, growing token
   array, so a shared prefix is stored once and referenced by many nodes.
-- `value` maps every key token to the KV cache unit (a physical block id in
-  Phase 2+) that holds that token's KV. Splitting a node slices the value.
+- `value` maps key pages to KV cache units: one unit per `page_size` tokens
+  (a physical block id in later phases). Splitting a node slices the value.
+- Matching and inserting round split positions DOWN to page boundaries, so a
+  node never shares a partial page/block with another node (this is SGLang's
+  `page_size` behavior and prevents double-freeing KV units).
 - `ref_count` is the number of running requests currently referencing the
   node's prefix; only `ref_count == 0` leaves may be evicted.
 - Eviction is LRU over evictable leaves by `last_access_time`.
@@ -15,7 +18,7 @@ from __future__ import annotations
 
 import heapq
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 
 class _Node:
@@ -42,10 +45,10 @@ class _Node:
         self.id = _Node._counter
         _Node._counter += 1
         self.parent = parent
-        self.children: dict[int, "_Node"] = {}
+        self.children: dict[tuple, "_Node"] = {}
         self.start = start
         self.length = length
-        self.value = value  # per-key-token KV unit id, or None for the root
+        self.value = value  # per-page KV unit id, or None for the root
         self.last_access_time = 0
         self.ref_count = 0
 
@@ -58,15 +61,17 @@ class _Node:
 
 @dataclass
 class MatchResult:
-    matched_len: int  # number of query tokens covered by the cached prefix
-    blocks: List[int] = field(default_factory=list)  # concatenated node values
+    matched_len: int  # page-aligned number of query tokens covered
+    blocks: List[int] = field(default_factory=list)  # concatenated per-page values
     node: Optional[_Node] = None  # deepest node fully matched (or split boundary)
 
 
 class RadixCache:
-    """Token-level radix tree over a shared token store."""
+    """Page-aligned radix tree over a shared token store."""
 
-    def __init__(self):
+    def __init__(self, page_size: int = 1):
+        assert page_size >= 1
+        self.page_size = page_size
         self.tokens: List[int] = []  # shared token array (grows on insert)
         self.root = _Node(parent=None, start=0, length=0, value=None)
         self.root.ref_count = 1  # root is never evictable
@@ -77,6 +82,19 @@ class RadixCache:
 
     def _node_key(self, node: _Node) -> List[int]:
         return self.tokens[node.start : node.start + node.length]
+
+    def _page_floor(self, n: int) -> int:
+        return n // self.page_size * self.page_size
+
+    def _page_key(self, start_or_node, offset: int = 0) -> tuple:
+        """Dict key: the first page of a node, of `self.tokens[start:...]`, or of a list."""
+        if isinstance(start_or_node, _Node):
+            seq, start = self.tokens, start_or_node.start + offset
+        elif isinstance(start_or_node, int):
+            seq, start = self.tokens, start_or_node + offset
+        else:
+            seq, start = start_or_node, offset
+        return tuple(seq[start : start + self.page_size])
 
     def _touch(self, node: _Node) -> None:
         self._access_time += 1
@@ -91,32 +109,34 @@ class RadixCache:
     def _split_node(self, node: _Node, split_len: int) -> _Node:
         """Split `node` into a prefix node of `split_len` tokens + a suffix node.
 
-        The new prefix node takes `node`'s position in the tree (same parent,
-        ref_count and value prefix); `node` keeps the suffix, its children and
-        slides its interval forward.
+        `split_len` must be page-aligned. The new prefix node takes `node`'s
+        position in the tree (same parent, ref_count and value prefix); `node`
+        keeps the suffix, its children and slides its interval forward.
         """
         new_node = _Node(
             parent=node.parent,
             start=node.start,
             length=split_len,
-            value=node.value[:split_len] if node.value is not None else None,
+            value=node.value[: split_len // self.page_size]
+            if node.value is not None
+            else None,
         )
         new_node.ref_count = node.ref_count
         new_node.last_access_time = node.last_access_time
-        new_node.children = {self.tokens[node.start + split_len]: node}
         node.parent = new_node
         node.start += split_len
         node.length -= split_len
         if node.value is not None:
-            node.value = node.value[split_len:]
+            node.value = node.value[split_len // self.page_size :]
         node.ref_count = 0
+        new_node.children = {self._page_key(node): node}
         if new_node.parent is not None:
-            new_node.parent.children[self.tokens[new_node.start]] = new_node
+            new_node.parent.children[self._page_key(new_node)] = new_node
         return new_node
 
     def _delete_leaf(self, node: _Node) -> None:
         parent = node.parent
-        del parent.children[self.tokens[node.start]]
+        del parent.children[self._page_key(node)]
         node.parent = None  # marks the node deleted (stale heap entries skip it)
         self._evictable_leaves.discard(node)
         self._update_leaf_status(parent)
@@ -124,13 +144,13 @@ class RadixCache:
     # ---- public API -----------------------------------------------------
 
     def match_prefix(self, ids: List[int]) -> MatchResult:
-        """Return the longest cached prefix of `ids` and its KV units."""
+        """Return the longest page-aligned cached prefix of `ids` and its KV units."""
         result = MatchResult(matched_len=0)
         node = self.root
         self._touch(node)
         i = 0
-        while i < len(ids) and ids[i] in node.children:
-            child = node.children[ids[i]]
+        while i + self.page_size <= len(ids) and self._page_key(ids, i) in node.children:
+            child = node.children[self._page_key(ids, i)]
             self._touch(child)
             j = 0
             k = child.start
@@ -140,13 +160,15 @@ class RadixCache:
                 and self.tokens[k + j] == ids[i + j]
             ):
                 j += 1
+            j = self._page_floor(j)
             if j < child.length:
-                # query ends (or diverges) inside the child: expose boundary
-                child = self._split_node(child, j)
+                # query diverges (or ends) inside this node: expose aligned boundary
+                if j > 0:
+                    child = self._split_node(child, j)
                 node = child
                 result.matched_len += j
                 if child.value is not None:
-                    result.blocks.extend(child.value)
+                    result.blocks.extend(child.value[: j // self.page_size])
                 break
             node = child
             i += child.length
@@ -156,16 +178,23 @@ class RadixCache:
         result.node = node
         return result
 
-    def insert(self, ids: List[int], value: Optional[List[int]] = None) -> None:
-        """Insert `ids` into the tree; `value` maps each key token to its KV unit.
+    def insert(
+        self, ids: List[int], value: Optional[List[int]] = None
+    ) -> Tuple[_Node, int]:
+        """Insert `ids` into the tree.
 
-        `value` may be `None` (tokens cached without KV, e.g. in tests).
+        `value` maps key pages to KV units (`len(value) == len(ids) // page_size`),
+        or `None` (tokens cached without KV, e.g. in tests).
+
+        Returns `(deepest_node, new_start)`: the deepest node on the inserted
+        path, and the token offset from which the tree did NOT already have
+        coverage (pages before `new_start // page_size` were duplicates).
         """
         if not ids:
-            return
+            return self.root, 0
         start = len(self.tokens)
         self.tokens.extend(ids)
-        self._insert_helper(self.root, start, len(ids), value)
+        return self._insert_helper(self.root, start, len(ids), value)
 
     def _insert_helper(
         self,
@@ -173,13 +202,13 @@ class RadixCache:
         key_start: int,
         key_len: int,
         value: Optional[List[int]],
-    ) -> None:
+    ) -> Tuple[_Node, int]:
         self._touch(node)
         if key_len == 0:
-            return
-        ch = self.tokens[key_start]
-        if ch in node.children:
-            child = node.children[ch]
+            return node, 0
+        key = self._page_key(key_start)
+        if key in node.children:
+            child = node.children[key]
             i = 0
             while (
                 i < child.length
@@ -187,28 +216,39 @@ class RadixCache:
                 and self.tokens[child.start + i] == self.tokens[key_start + i]
             ):
                 i += 1
+            i = self._page_floor(i)
+            if i == 0:
+                # no full page shared: create a sibling under `node`
+                new_node = _Node(parent=node, start=key_start, length=key_len, value=value)
+                node.children[key] = new_node
+                self._touch(new_node)
+                self._update_leaf_status(node)
+                self._update_leaf_status(new_node)
+                return new_node, 0
             if i == child.length:
                 # whole child is a prefix of the new key
-                self._insert_helper(
+                node, new_start = self._insert_helper(
                     child,
                     key_start + child.length,
                     key_len - child.length,
-                    value[child.length:] if value is not None else None,
+                    value[child.length // self.page_size :] if value is not None else None,
                 )
-            else:
-                new_node = self._split_node(child, i)
-                self._insert_helper(
-                    new_node,
-                    key_start + i,
-                    key_len - i,
-                    value[i:] if value is not None else None,
-                )
-        else:
-            new_node = _Node(parent=node, start=key_start, length=key_len, value=value)
-            node.children[ch] = new_node
-            self._touch(new_node)
-            self._update_leaf_status(node)
-            self._update_leaf_status(new_node)
+                return node, child.length + new_start
+            # diverge inside the child: split at the shared (page-aligned) prefix
+            new_node = self._split_node(child, i)
+            node, new_start = self._insert_helper(
+                new_node,
+                key_start + i,
+                key_len - i,
+                value[i // self.page_size :] if value is not None else None,
+            )
+            return node, i + new_start
+        new_node = _Node(parent=node, start=key_start, length=key_len, value=value)
+        node.children[key] = new_node
+        self._touch(new_node)
+        self._update_leaf_status(node)
+        self._update_leaf_status(new_node)
+        return new_node, 0
 
     def inc_ref_count(self, node: Optional[_Node]) -> None:
         """Mark one more request as referencing the path root..node."""
@@ -293,11 +333,10 @@ class RadixCache:
 
 
 if __name__ == "__main__":
-    tree = RadixCache()
-    tree.insert([1, 2, 3])
-    tree.insert([1, 2, 4, 5])
-    tree.insert([1, 2, 4, 5, 6, 7])
-    tree.insert([8, 9, 10])
+    tree = RadixCache(page_size=2)
+    tree.insert([1, 2, 3, 4, 5, 6], [10, 11, 12])
+    tree.insert([1, 2, 7, 8], [20, 21])
+    tree.insert([1, 2, 3, 4, 9, 10], [30, 31, 32])
     print(tree.pretty_print())
     r = tree.match_prefix([1, 2, 3, 13, 14])
-    print("match:", r.matched_len, "node:", r.node)
+    print("match:", r.matched_len, "blocks:", r.blocks, "node:", r.node)
