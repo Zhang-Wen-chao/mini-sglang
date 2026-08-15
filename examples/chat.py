@@ -44,10 +44,19 @@ def build_toy():
 
 
 def build_hf(model_id, dtype, device):
-    from transformers import LlamaForCausalLM, LlamaTokenizerFast
+    from transformers import LlamaForCausalLM
 
     hf = LlamaForCausalLM.from_pretrained(model_id, torch_dtype=dtype)
-    tok = LlamaTokenizerFast.from_pretrained(model_id)
+    try:
+        from transformers import LlamaTokenizerFast
+
+        tok = LlamaTokenizerFast.from_pretrained(model_id)
+    except Exception:
+        # some repos (e.g. llama-68m) ship only a sentencepiece model that
+        # transformers 5.x mis-detects as tiktoken: fall back to the slow one
+        from transformers import LlamaTokenizer
+
+        tok = LlamaTokenizer.from_pretrained(model_id)
     c = hf.config
     cfg = LlamaConfig(
         vocab_size=c.vocab_size,

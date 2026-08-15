@@ -41,13 +41,13 @@ PROMPTS = [
 ]
 
 
-def run_mini(model, tok, device, prompts, max_new_tokens):
+def run_mini(model, tok, device, prompts, max_new_tokens, dtype):
     model = model.to(device).eval()
     head_dim = model.config.hidden_size // model.config.num_attention_heads
     pool = KVBlockPool(
         4096, 64, model.config.num_hidden_layers,
         model.config.num_key_value_heads, head_dim,
-        dtype=torch.float32, device=device,
+        dtype=dtype, device=device,
     )
     cache = RadixCache(page_size=64)
     sched = Scheduler(pool, cache, max_running=8,
@@ -62,13 +62,14 @@ def run_sglang(model_id, prompts, max_new_tokens, dtype):
     engine = sglang.Engine(
         model_path=model_id,
         dtype=dtype,
-        max_total_num_tokens=16384,
+        max_total_tokens=16384,
         mem_fraction_static=0.6,
+        attention_backend="triton",  # flashinfer has no fp32 prefill
     )
-    params = sglang.SamplingParams(temperature=0, max_new_tokens=max_new_tokens)
-    outs = engine.generate(prompts, params)
+    params = {"temperature": 0, "max_new_tokens": max_new_tokens}
+    outs = engine.generate(prompts, sampling_params=params)
     engine.shutdown()
-    return [o["text"] for o in outs]
+    return [o["text"] if isinstance(o, dict) else o.text for o in outs]
 
 
 def run_hf(model_id, prompts, max_new_tokens, device, dtype):
@@ -99,7 +100,7 @@ def main():
     device = torch.device(args.device)
 
     tok, mini_model = build_hf(args.model, dtype, device)
-    mini_outs = run_mini(mini_model, tok, device, PROMPTS, args.max_new_tokens)
+    mini_outs = run_mini(mini_model, tok, device, PROMPTS, args.max_new_tokens, dtype)
 
     if args.backend == "sglang":
         ref_outs = run_sglang(args.model, PROMPTS, args.max_new_tokens, args.dtype)
@@ -107,14 +108,18 @@ def main():
         ref_outs = run_hf(args.model, PROMPTS, args.max_new_tokens, device, dtype)
 
     all_exact = True
+    all_norm = True
     for p, mine, ref in zip(PROMPTS, mini_outs, ref_outs):
         exact = mine == ref
+        norm = mine.strip() == ref.strip()  # tolerate bf16 first-token space flip
         all_exact &= exact
+        all_norm &= norm
         print(f"prompt: {p[:40]}")
         print(f"  mini-sglang : {mine[:70]!r}")
         print(f"  {args.backend:<12}: {ref[:70]!r}")
-        print(f"  exact match : {exact}")
+        print(f"  exact match : {exact} | normalized match: {norm}")
     print("ALL PROMPTS EXACT MATCH:", all_exact)
+    print("ALL PROMPTS NORMALIZED MATCH:", all_norm)
 
 
 if __name__ == "__main__":
