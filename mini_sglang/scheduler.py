@@ -140,6 +140,9 @@ class Scheduler:
             req.past_len += len(sched.input_ids)
             if sched.is_prefill:
                 req.prefill_done = True
+                self.stats["prefill_tokens"] += len(sched.input_ids)
+            else:
+                self.stats["decode_tokens"] += len(sched.input_ids)
             self._cache_completed_blocks(req)
             req.token_ids.append(tok)
             req.num_generated += 1
