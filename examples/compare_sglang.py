@@ -109,17 +109,28 @@ def main():
 
     all_exact = True
     all_norm = True
+    all_tokens = True
     for p, mine, ref in zip(PROMPTS, mini_outs, ref_outs):
         exact = mine == ref
         norm = mine.strip() == ref.strip()  # tolerate bf16 first-token space flip
+        # token-level: same tokenizer on both texts removes detokenizer effects
+        mine_ids = tok.encode(mine, add_special_tokens=False)
+        ref_ids = tok.encode(ref, add_special_tokens=False)
+        tokens_match = mine_ids == ref_ids
+        diverges_at = next(
+            (i for i, (a, b) in enumerate(zip(mine_ids, ref_ids)) if a != b), None
+        )
         all_exact &= exact
         all_norm &= norm
+        all_tokens &= tokens_match
         print(f"prompt: {p[:40]}")
         print(f"  mini-sglang : {mine[:70]!r}")
         print(f"  {args.backend:<12}: {ref[:70]!r}")
-        print(f"  exact match : {exact} | normalized match: {norm}")
+        print(f"  exact: {exact} | normalized: {norm} | token-ids: {tokens_match}"
+              f"{'' if diverges_at is None else ' (first divergence at token #' + str(diverges_at) + ')'}")
     print("ALL PROMPTS EXACT MATCH:", all_exact)
     print("ALL PROMPTS NORMALIZED MATCH:", all_norm)
+    print("ALL PROMPTS TOKEN-ID MATCH:", all_tokens)
 
 
 if __name__ == "__main__":

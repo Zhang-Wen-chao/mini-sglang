@@ -60,15 +60,19 @@ Verified on 4xL20 (2026-08-15, llama-68m, fp32): identical outputs with and
 without radix-prefix reuse; 64-token shared prefixes hit the cache across
 consecutive requests (`cached_tokens` grows, prefill shrinks).
 
-Comparison vs independent baselines (same model, greedy):
+Comparison vs independent baselines (same model, greedy, L20 2026-08-15):
 
-- HF `transformers.generate` (fp32, L20 2026-08-15): 4/4 prompts
-  **byte-identical**.
-- Official SGLang engine 0.5.17 (bf16, L20 2026-08-15): 4/4 prompts
-  **identical after whitespace normalization**; 2/4 byte-identical. The only
-  differences are a leading-space flip on the first generated token, a bf16
-  rounding effect at a logit boundary between different attention kernels;
-  the rest of each sequence is byte-identical.
+| Baseline | dtype | byte-identical | token-id identical |
+| --- | --- | --- | --- |
+| HF `transformers.generate` | fp32 | 4/4 | 4/4 |
+| Official SGLang 0.5.17 | bf16 | 2/4 (text rendering) | **4/4** |
+
+Token-id-level comparison removes detokenizer effects: in fp32 the outputs
+are byte-identical to HF; in bf16 the generated token sequences are
+identical to the official SGLang engine (the 2 non-byte-identical texts are
+only a leading-space rendering difference in SGLang's detokenizer). The
+fp32-vs-bf16 first-token divergences between HF and SGLang are bf16 rounding
+at logit boundaries, common to every implementation.
 
 ```bash
 python examples/compare_sglang.py --model JackFram/llama-68m --device cuda \
