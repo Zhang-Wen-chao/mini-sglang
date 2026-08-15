@@ -60,6 +60,19 @@ Verified on 4xL20 (2026-08-15, llama-68m, fp32): identical outputs with and
 without radix-prefix reuse; 64-token shared prefixes hit the cache across
 consecutive requests (`cached_tokens` grows, prefill shrinks).
 
+Comparison vs independent baselines (same model, greedy, fp32):
+
+- HF `transformers.generate`: 4/4 prompts **byte-identical**.
+- Official SGLang engine: see [testing.md](dev-guides/testing.md) for the
+  environment-bound record.
+
+```bash
+python examples/compare_sglang.py --model JackFram/llama-68m --device cuda \
+    --backend hf        # needs transformers only
+python examples/compare_sglang.py --model JackFram/llama-68m --device cuda \
+    --backend sglang    # needs pip install sglang
+```
+
 ## Repository layout
 
 ```
