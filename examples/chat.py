@@ -57,14 +57,15 @@ def build_hf(model_id, dtype, device):
         num_key_value_heads=c.num_key_value_heads,
         intermediate_size=c.intermediate_size,
         max_position_embeddings=c.max_position_embeddings,
-        rms_norm_eps=c.rms_norm_eps,
-        rope_theta=c.rope_theta,
-        tie_word_embeddings=c.tie_word_embeddings,
-        bos_token_id=c.bos_token_id or 1,
-        eos_token_id=c.eos_token_id or 2,
+        rms_norm_eps=getattr(c, "rms_norm_eps", 1e-5),
+        rope_theta=getattr(c, "rope_theta", 10000.0),
+        tie_word_embeddings=getattr(c, "tie_word_embeddings", False),
+        bos_token_id=getattr(c, "bos_token_id", 1) or 1,
+        eos_token_id=getattr(c, "eos_token_id", 2) or 2,
     )
     model = LlamaLike(cfg)
-    model.load_state_dict(hf.state_dict())
+    sd = {k.replace("model.", "", 1): v for k, v in hf.state_dict().items()}
+    model.load_state_dict(sd)
     del hf
     return tok, model
 
