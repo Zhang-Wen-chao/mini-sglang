@@ -45,15 +45,16 @@
 
 ## Phase 3：最小推理引擎（tokenize → prefill → decode → 返回）
 
-- [ ] `model.py`：Llama 风格最小模型（RMSNorm + RoPE + MHA + MLP），KV 读写走池子
-- [ ] `tokenizer.py`：零依赖 TinyTokenizer（byte 级）；可插拔 HF tokenizer
-- [ ] `engine.py`：连续批处理循环（decode 合并 batch，prefill 逐个），采样 + EOS
-- [ ] `examples/chat.py`：端到端演示；L20 上加载真实小模型权重（如 llama-68m）验证
-- [ ] CPU 单测：`tests/test_engine.py`（toy 随机模型 + TinyTokenizer）
-- [ ] L20 验证：容器内跑通真实模型生成，radix cache 命中可观测
+- [x] `model.py`：Llama 风格最小模型（RMSNorm + RoPE + MHA + MLP），KV 读写走池子
+- [x] `tokenizer.py`：零依赖 TinyTokenizer（byte 级）；可插拔 HF tokenizer
+- [x] `engine.py`：连续批处理循环（调度 → 前向 → 采样 → 推进），采样 + EOS
+- [x] `examples/chat.py`：端到端演示；GPU 主机上加载真实小模型权重（llama-68m）验证
+- [x] CPU 单测：`tests/test_engine.py`（toy 随机模型 + TinyTokenizer）
+- [x] GPU 验证：真实模型生成 + radix cache 命中可观测（73-token 共享前缀命中 64-token 块）
 
 ## 收尾
 
-- [ ] README：架构图、快速开始、与 SGLang 的对应关系、与真实实现的差距
-- [ ] dev-guides 文档同步（AGENTS.md / conventions / testing / workflow）
-- [ ] 私有仓库推送 + 公开发布前清理检查
+- [x] README：架构、快速开始、与 SGLang 的逐模块对应、与真实实现的差距
+- [x] 与独立基线对比：HF fp32 逐字节一致 4/4；正版 SGLang 0.5.17 bf16 token 级一致 4/4
+- [x] 吞吐参考记录（17–35× 差距，环境绑定，非基准声明）
+- [x] 公开发布前清理检查（无凭据 / 无本机路径 / 无内部标识）

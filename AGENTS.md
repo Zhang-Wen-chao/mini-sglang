@@ -19,8 +19,8 @@ inference engine, in ~1,000 lines.
   requests already in the current batch are never preempted.
 - Model is a structural clone of HF `LlamaForCausalLM` (same state_dict
   names); KV goes through the block pool.
-- Run `pytest -q` locally (conda env `PyTorch`); real-model verification on
-  L20 via `examples/chat.py --hf-model JackFram/llama-68m --device cuda`
-  (container needs `HF_ENDPOINT=https://hf-mirror.com`).
+- Run `pytest -q` locally; real-model verification on a GPU host via
+  `examples/chat.py --hf-model JackFram/llama-68m --device cuda`
+  (if huggingface.co is blocked, set `HF_ENDPOINT` to a reachable mirror).
 - Do not promise features that are not implemented: no chunked prefill, no
   ragged decode batching, no async, no swap, no kernel optimizations.
