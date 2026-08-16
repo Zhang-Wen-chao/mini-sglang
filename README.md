@@ -74,6 +74,18 @@ only a leading-space rendering difference in SGLang's detokenizer). The
 fp32-vs-bf16 first-token divergences between HF and SGLang are bf16 rounding
 at logit boundaries, common to every implementation.
 
+Throughput is NOT a goal of this project. For reference (L20 2026-08-15,
+llama-68m, bf16, generated tokens/second, prefill included in wall time):
+
+| batch | mini-sglang | SGLang 0.5.17 | ratio |
+| --- | --- | --- | --- |
+| 4 | 530 tok/s | 9,271 tok/s | 17x |
+| 16 | 493 tok/s | 17,336 tok/s | 35x |
+
+The gap widens with batch size: SGLang's CUDA-graph batched decode scales,
+our per-request forwards do not (by design — no kernels, no ragged
+batching). See `examples/bench_throughput.py`.
+
 ```bash
 python examples/compare_sglang.py --model JackFram/llama-68m --device cuda \
     --backend hf        # needs transformers only
